@@ -1,0 +1,28 @@
+services:
+  build:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+    entrypoint: ['/build/build-pba.sh']
+    volumes:
+      - uefi-greeter-repo:/build
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/build/target
+    working_dir: /build
+
+volumes:
+  cargo-cache:
+  cargo-git:
+  cargo-target:
+    driver: local
+    driver_opts:
+      type: none
+      device: ./target
+      o: bind
+  uefi-greeter-repo:
+    driver: local
+    driver_opts:
+      type: none
+      device: .
+      o: bind
