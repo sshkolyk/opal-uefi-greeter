@@ -69,6 +69,7 @@ pub struct Config {
     pub retry_prompt: Option<String>,
     pub sed_locked_msg: Option<String>,
     pub clear_on_retry: bool,
+    pub part_uuid: Option<String>,
 }
 
 impl Config {
@@ -94,6 +95,7 @@ impl Config {
             retry_prompt: optional(&verbs, "retry-prompt", None),
             sed_locked_msg: optional(&verbs, "sed-locked-msg", None),
             clear_on_retry: optional(&verbs, "clear-on-retry", None).as_deref() == Some("on"),
+            part_uuid: optional(&verbs, "part-uuid", None),
         })
     }
 }

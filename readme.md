@@ -23,8 +23,10 @@ is requested just through the UEFI text I/O.
 ## Using it
 You have to be familiar with [sedutil-cli](https://github.com/Drive-Trust-Alliance/sedutil/wiki/Encrypting-your-drive).
 
-Run the `./build-pba.sh` script or follow the steps from it manually - make sure
-you have all the programs it uses (e.g. gdisk) and have set up Rust nightly.
+1. Copy config-example to config and edit it.
+   Find UUID in `sudo lsblk -o NAME,PARTUUID,PARTLABEL,MOUNTPOINT` list and set part-uuid.
+2. Run the `./build-pba.sh` script or follow the steps from it manually - make sure
+  you have all the programs it uses (e.g. gdisk) and have set up Rust nightly.
 
 This will yield an .img file that you have to use with `--loadpbaimage` argument
 when setting up self-encrypted drive with the link above.
