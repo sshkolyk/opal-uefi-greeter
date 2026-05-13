@@ -21,7 +21,8 @@ pub enum Error {
     ConfigArgsBadUtf16,
     ConfigVerbMissing(&'static str),
     NoBootPartitions,
-    MultipleBootPartitions,
+    BootPartitionNotFoundByGUID,
+    InvalidBootPartition,
     ImageNotFound(String),
     ImageNotPeCoff,
 }

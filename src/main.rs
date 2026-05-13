@@ -2,10 +2,8 @@
 #![no_main]
 #![feature(abi_efiapi)]
 #![feature(negative_impls)]
-#![feature(const_fn_trait_bound)]
 #![feature(new_uninit)]
 #![feature(maybe_uninit_slice)]
-#![feature(bool_to_option)]
 #![allow(clippy::missing_safety_doc)]
 
 #[macro_use]
@@ -13,25 +11,17 @@ extern crate alloc;
 // make sure to link this
 extern crate rlibc;
 
-use alloc::{string::String, vec::Vec};
+use alloc::{vec::Vec};
 use core::{convert::TryFrom, fmt::Write, time::Duration};
-
-use uefi::{
-    prelude::*,
-    proto::{
-        console::text::{Key, ScanCode},
-        device_path::DevicePath,
-        loaded_image::LoadedImage,
-        media::{
-            block::BlockIO,
-            file::{File, FileAttribute, FileInfo, FileMode, FileType},
-            fs::SimpleFileSystem,
-            partition::{GptPartitionType, PartitionInfo},
-        },
+use uefi::{prelude::*, proto::{
+    device_path::DevicePath,
+    loaded_image::LoadedImage,
+    media::{
+        block::BlockIO,
+        file::{File, FileAttribute, FileInfo, FileMode, FileType},
+        fs::SimpleFileSystem,
     },
-    table::{boot::MemoryType, runtime::ResetType},
-    CStr16, CString16,
-};
+}, table::{boot::MemoryType, runtime::ResetType}, CString16};
 
 use crate::{
     boot_services_ext::BootServicesExt,
@@ -53,6 +43,8 @@ pub mod nvme_passthru;
 pub mod opal;
 pub mod secure_device;
 pub mod util;
+pub mod boot_partition;
+mod io;
 
 #[entry]
 fn main(image_handle: Handle, mut st: SystemTable<Boot>) -> Status {
@@ -71,8 +63,7 @@ fn main(image_handle: Handle, mut st: SystemTable<Boot>) -> Status {
 }
 
 fn run(image_handle: Handle, st: &mut SystemTable<Boot>) -> Result {
-    config_stdout(st).fix(info!())?;
-
+    io::config_stdout(st).fix(info!())?;
     let config = load_config(image_handle, st)?;
 
     let devices = find_secure_devices(st).fix(info!())?;
@@ -83,7 +74,7 @@ fn run(image_handle: Handle, st: &mut SystemTable<Boot>) -> Result {
             {
                 let mut prompt = config.prompt.as_deref().unwrap_or("password: ");
                 let mut session = loop {
-                    let password = read_password(st, prompt)?;
+                    let password = io::read_password(st, prompt)?;
 
                     let mut hash = vec![0; 32];
 
@@ -121,7 +112,8 @@ fn run(image_handle: Handle, st: &mut SystemTable<Boot>) -> Result {
         }
     }
 
-    let handle = find_boot_partition(st)?;
+    let part_uuid = config.part_uuid.as_deref();
+    let handle = boot_partition::find_boot_partition(st, part_uuid)?;
 
     let dp = st
         .boot_services()
@@ -130,44 +122,45 @@ fn run(image_handle: Handle, st: &mut SystemTable<Boot>) -> Result {
     let dp = unsafe { &mut *dp.get() };
 
     let image = config.image;
-    let buf = read_file(st, handle, &image)
-        .fix(info!())?
-        .ok_or(Error::ImageNotFound(image))?;
 
-    if buf.get(0..2) != Some(&[0x4d, 0x5a]) {
-        return Err(Error::ImageNotPeCoff);
+    let buf = read_file(st, handle, &image);
+    match buf {
+        Err(err) if err.status() == Status::NOT_FOUND => {
+            log::error!("Image '{}' not found on the boot partition", image);
+            return Err(Error::ImageNotFound(image));
+        }
+
+        Err(err) => {
+            log::error!("UEFI error: {:?} when loading image {}", err.status(), image);
+            return Err(Error::ImageNotFound(image));
+        }
+
+        Ok(res) => {
+            let buf = res.log().unwrap();
+            if buf.get(0..2) != Some(&[0x4d, 0x5a]) {
+                return Err(Error::ImageNotPeCoff);
+            }
+
+            let loaded_image_handle = st
+                .boot_services()
+                .load_image(false, image_handle, Some(dp), Some(&buf))
+                .fix(info!())?;
+            let loaded_image = st
+                .boot_services()
+                .handle_protocol::<LoadedImage>(loaded_image_handle)
+                .fix(info!())?;
+            let loaded_image = unsafe { &mut *loaded_image.get() };
+
+            let args = CString16::try_from(&*config.args).or(Err(Error::ConfigArgsBadUtf16))?;
+            unsafe { loaded_image.set_load_options(args.as_ptr(), args.num_bytes() as _) };
+
+            st.boot_services()
+                .start_image(loaded_image_handle)
+                .fix(info!())?;
+
+            Ok(())
+        }
     }
-
-    let loaded_image_handle = st
-        .boot_services()
-        .load_image(false, image_handle, Some(dp), Some(&buf))
-        .fix(info!())?;
-    let loaded_image = st
-        .boot_services()
-        .handle_protocol::<LoadedImage>(loaded_image_handle)
-        .fix(info!())?;
-    let loaded_image = unsafe { &mut *loaded_image.get() };
-
-    let args = CString16::try_from(&*config.args).or(Err(Error::ConfigArgsBadUtf16))?;
-    unsafe { loaded_image.set_load_options(args.as_ptr(), args.num_bytes() as _) };
-
-    st.boot_services()
-        .start_image(loaded_image_handle)
-        .fix(info!())?;
-
-    Ok(())
-}
-
-fn config_stdout(st: &mut SystemTable<Boot>) -> uefi::Result {
-    st.stdout().reset(false)?.log();
-
-    if let Some(mode) = st.stdout().modes().max_by_key(|m| {
-        let m = m.log();
-        m.rows() * m.columns()
-    }) {
-        st.stdout().set_mode(mode.split().1)?.log();
-    };
-    Ok(().into())
 }
 
 fn load_config(image_handle: Handle, st: &mut SystemTable<Boot>) -> Result<Config> {
@@ -183,55 +176,13 @@ fn load_config(image_handle: Handle, st: &mut SystemTable<Boot>) -> Result<Confi
         .boot_services()
         .locate_device_path::<SimpleFileSystem>(unsafe { &mut *device_path.get() })
         .fix(info!())?;
-    let buf = read_file(st, device_handle, "config")
+    let buf = read_file(st, device_handle, "config.ini")
         .fix(info!())?
         .ok_or(Error::ConfigMissing)?;
     let config = Config::parse(&buf)?;
     log::set_max_level(config.log_level);
-    log::debug!("loaded config = {:#?}", config);
+    log::debug!("loaded config.ini = {:#?}", config);
     Ok(config)
-}
-
-fn write_char(st: &mut SystemTable<Boot>, ch: u16) -> Result {
-    let str = &[ch, 0];
-    st.stdout()
-        .output_string(unsafe { CStr16::from_u16_with_nul_unchecked(str) })
-        .fix(info!())
-}
-
-fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> Result<String> {
-    st.stdout().write_str(prompt).unwrap();
-
-    let mut wait_for_key = [unsafe { st.stdin().wait_for_key_event().unsafe_clone() }];
-
-    let mut data = String::with_capacity(32);
-    loop {
-        st.boot_services()
-            .wait_for_event(&mut wait_for_key)
-            .fix(info!())?;
-
-        match st.stdin().read_key().fix(info!())? {
-            Some(Key::Printable(k)) if [0xD, 0xA].contains(&u16::from(k)) => {
-                write_char(st, 0x0D)?;
-                write_char(st, 0x0A)?;
-                break Ok(data);
-            }
-            Some(Key::Printable(k)) if u16::from(k) == 0x8 => {
-                if data.pop().is_some() {
-                    write_char(st, 0x08)?;
-                }
-            }
-            Some(Key::Printable(k)) => {
-                write_char(st, '*' as u16)?;
-                data.push(k.into());
-            }
-            Some(Key::Special(ScanCode::ESCAPE)) => {
-                st.runtime_services()
-                    .reset(ResetType::Shutdown, Status::SUCCESS, None)
-            }
-            _ => {}
-        }
-    }
 }
 
 fn pretty_session<'d>(
@@ -266,78 +217,46 @@ fn pretty_session<'d>(
 fn find_secure_devices(st: &mut SystemTable<Boot>) -> uefi::Result<Vec<SecureDevice>> {
     let mut result = Vec::new();
 
-    for handle in st.boot_services().find_handles::<BlockIO>()?.log() {
-        let blockio = st.boot_services().handle_protocol::<BlockIO>(handle)?.log();
+    let handles = st.boot_services().find_handles::<BlockIO>()?.log();
 
-        if unsafe { &mut *blockio.get() }
-            .media()
-            .is_logical_partition()
-        {
+    for handle in handles {
+        let block_io = st.boot_services().handle_protocol::<BlockIO>(handle)?.log();
+        let block_io = unsafe { &mut *block_io.get() };
+
+        if block_io.media().is_logical_partition() {
             continue;
         }
 
-        let device_path = st
-            .boot_services()
-            .handle_protocol::<DevicePath>(handle)?
-            .log();
-        let device_path = unsafe { &mut *device_path.get() };
+        // DevicePath OPTIONAL
+        let device_path = match st.boot_services().handle_protocol::<DevicePath>(handle) {
+            Ok(dp) => unsafe { Some(&mut *dp.log().get()) },
+            Err(_) => None,
+        };
 
-        if let Ok(nvme) = st
+        let Some(dp) = device_path else {
+            continue;
+        };
+
+        // NVMe locate
+        let nvme_handle = match st
             .boot_services()
-            .locate_device_path::<NvmExpressPassthru>(device_path)
-            .log_warning()
+            .locate_device_path::<NvmExpressPassthru>(dp)
         {
-            let nvme = st
-                .boot_services()
-                .handle_protocol::<NvmExpressPassthru>(nvme)?
-                .log();
+            Ok(h) => h.log(),
+            Err(_) => continue,
+        };
 
-            result.push(SecureDevice::new(handle, NvmeDevice::new(nvme.get())?.log())?.log())
-        }
-
-        // todo something like that:
-        //
-        // if let Ok(ata) = st
-        //     .boot_services()
-        //     .locate_device_path::<AtaExpressPassthru>(device_path)
-        //     .log_warning()
-        // {
-        //     let ata = st
-        //         .boot_services()
-        //         .handle_protocol::<AtaExpressPassthru>(ata)?
-        //         .log();
-        //
-        //     result.push(SecureDevice::new(handle, AtaDevice::new(ata.get())?.log())?.log())
-        // }
-        //
-        // ..etc
-    }
-    Ok(result.into())
-}
-
-fn find_boot_partition(st: &mut SystemTable<Boot>) -> Result<Handle> {
-    let mut res = None;
-    for handle in st
-        .boot_services()
-        .find_handles::<PartitionInfo>()
-        .fix(info!())?
-    {
-        let pi = st
+        let nvme = st
             .boot_services()
-            .handle_protocol::<PartitionInfo>(handle)
-            .fix(info!())?;
-        let pi = unsafe { &mut *pi.get() };
+            .handle_protocol::<NvmExpressPassthru>(nvme_handle)?.log().get();
 
-        match pi.gpt_partition_entry() {
-            Some(gpt) if { gpt.partition_type_guid } == GptPartitionType::EFI_SYSTEM_PARTITION => {
-                if res.replace(handle).is_some() {
-                    return Err(Error::MultipleBootPartitions);
-                }
-            }
-            _ => {}
-        }
+        let device = NvmeDevice::new(nvme)?;
+        let secure = SecureDevice::new(handle, device.log())?.log();
+
+        result.push(secure);
     }
-    res.ok_or(Error::NoBootPartitions)
+
+    Ok(result.into())
 }
 
 fn read_file(

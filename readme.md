@@ -25,12 +25,14 @@ You have to be familiar with [sedutil-cli](https://github.com/Drive-Trust-Allian
 
 1. Copy config-example to config and edit it.
    Find UUID in `sudo lsblk -o NAME,PARTUUID,PARTLABEL,MOUNTPOINT` list and set part-uuid.
+   It can be useful for prevent linux ESP changed by windows in dual boot.
+   Or set part-uuid blank it will try to find the first unlocked drive with a valid UEFI image on it.
 2. Run 
     ```bash
       docker compose run --rm build
     ```
 
-This will yield an .img file that you have to use with `--loadpbaimage` argument
+This will yield an .img file that you have to use with `--loadPBAimage` argument
 when setting up self-encrypted drive with the link above.
 
 This image also contains the `config` file copied from `config-example` file in this repo.

@@ -55,7 +55,7 @@ mmd -i "${OUTPUT_IMG}@@${OFFSET}" ::/EFI ::/EFI/BOOT || error
 mcopy -i "${OUTPUT_IMG}@@${OFFSET}" \
     target/x86_64-unknown-uefi/release/opal-uefi-greeter.efi \
     "::/EFI/BOOT/BOOTX64.efi" || error
-mcopy -i "${OUTPUT_IMG}@@${OFFSET}" config.ini ::/config || error
+mcopy -i "${OUTPUT_IMG}@@${OFFSET}" config.ini ::/config.ini || error
 
 echo
 echo "Built the PBA image successfully"
