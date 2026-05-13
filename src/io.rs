@@ -33,34 +33,51 @@ pub fn write_char(st: &mut SystemTable<Boot>, ch: u16) -> error::Result {
 pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<String> {
     st.stdout().write_str(prompt).unwrap();
 
-    let mut wait_for_key = [unsafe { st.stdin().wait_for_key_event().unsafe_clone() }];
+    let mut wait_events = [unsafe { st.stdin().wait_for_key_event().unsafe_clone() }];
+    let mut password = String::with_capacity(32);
 
-    let mut data = String::with_capacity(32);
     loop {
         st.boot_services()
-            .wait_for_event(&mut wait_for_key)
+            .wait_for_event(&mut wait_events)
             .fix(info!())?;
 
-        match st.stdin().read_key().fix(info!())? {
-            Some(Key::Printable(k)) if [0xD, 0xA].contains(&u16::from(k)) => {
-                write_char(st, 0x0D)?;
-                write_char(st, 0x0A)?;
-                break Ok(data);
-            }
-            Some(Key::Printable(k)) if u16::from(k) == 0x8 => {
-                if data.pop().is_some() {
-                    write_char(st, 0x08)?;
+        while let Some(key) = st.stdin().read_key().fix(info!())? {
+            match key {
+                // enter
+                Key::Printable(ch) if matches!(u16::from(ch), 0x0D | 0x0A) => {
+                    newline(st)?;
+                    return Ok(password);
                 }
+                // backspace
+                Key::Printable(ch) if u16::from(ch) == 0x08 => {
+                    if password.pop().is_some() {
+                        backspace(st)?;
+                    }
+                }
+                // other printable characters
+                Key::Printable(ch) => {
+                    write_char(st, '*' as u16)?;
+                    password.push(ch.into());
+                }
+                // shutdown on escape
+                Key::Special(ScanCode::ESCAPE) => {
+                    st.runtime_services()
+                        .reset(ResetType::Shutdown, Status::SUCCESS, None);
+                }
+
+                _ => {}
             }
-            Some(Key::Printable(k)) => {
-                write_char(st, '*' as u16)?;
-                data.push(k.into());
-            }
-            Some(Key::Special(ScanCode::ESCAPE)) => {
-                st.runtime_services()
-                    .reset(ResetType::Shutdown, Status::SUCCESS, None)
-            }
-            _ => {}
         }
     }
+}
+
+fn newline(st: &mut SystemTable<Boot>) -> error::Result<()> {
+    write_char(st, 0x0D)?;
+    write_char(st, 0x0A)
+}
+
+fn backspace(st: &mut SystemTable<Boot>) -> error::Result<()> {
+    write_char(st, 0x08)?;
+    write_char(st, ' ' as u16)?;
+    write_char(st, 0x08)
 }
