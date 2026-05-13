@@ -1,6 +1,13 @@
 opal-uefi-greeter
 -
 
+It's a fork of <b>necauqua/opal-uefi-greeter</b> with following improvements:
+1. Build using docker compose without headache.
+2. Configurable part-uuid for prevent linux ESP changed by windows in dual boot.
+3. Password input improvements
+
+
+
 This is an UEFI application written in Rust that unlocks a SED and then launches
 another UEFI application from the unlocked drive - typically some bootloader or the Linux efistub.
 
