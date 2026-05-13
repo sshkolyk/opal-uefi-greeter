@@ -30,7 +30,7 @@ is requested just through the UEFI text I/O.
 ## Using it
 You have to be familiar with [sedutil-cli](https://github.com/Drive-Trust-Alliance/sedutil/wiki/Encrypting-your-drive).
 
-1. Copy config-example to config and edit it.
+1. Copy config-example to config.ini and edit it.
    Find UUID in `sudo lsblk -o NAME,PARTUUID,PARTLABEL,MOUNTPOINT` list and set part-uuid.
    It can be useful for prevent linux ESP changed by windows in dual boot.
    Or set part-uuid blank it will try to find the first unlocked drive with a valid UEFI image on it.
@@ -42,10 +42,10 @@ You have to be familiar with [sedutil-cli](https://github.com/Drive-Trust-Allian
 This will yield an .img file that you have to use with `--loadPBAimage` argument
 when setting up self-encrypted drive with the link above.
 
-This image also contains the `config` file copied from `config-example` file in this repo.
+This image also contains the `config.ini` file copied from `config-example` file in this repo.
 You would want to edit that (by editing `config-example` before making the image or by mounting the image)
 to specify the UEFI image that will be run - either specify the image of your bootloader (e.g. `\EFI\Microsoft\Boot\bootmgfw.efi` for Windows or `\EFI\BOOT\BOOTX64.efi` to launch the default bootloader such as grub, if present on the encrypted drive) or you can have an EFISTUB setup by specifying the `vmlinuz-linux`
-itself as the UEFI image and giving it kernel arguments in the `config` file.
+itself as the UEFI image and giving it kernel arguments in the `config.ini` file.
 
 If you have multiple SEDs - only one of them has to have the image! This is true
 even without using this project I believe. Also, a reminder that this project currently only supports
