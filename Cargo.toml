@@ -21,6 +21,8 @@ hmac = { version = "0.11", default-features = false }
 
 log = { version = '0.4', default-features = false }
 
+zeroize = { version = '=1.7.0', default-features = false, features = ['alloc'] }
+
 [patch.crates-io]
 uefi = { git = 'https://github.com/rust-osdev/uefi-rs' }
 uefi-macros = { git = 'https://github.com/rust-osdev/uefi-rs' }

@@ -76,7 +76,7 @@ fn run(image_handle: Handle, st: &mut SystemTable<Boot>) -> Result {
                 let mut session = loop {
                     let password = io::read_password(st, prompt)?;
 
-                    let mut hash = vec![0; 32];
+                    let mut hash = zeroize::Zeroizing::new(vec![0u8; 32]);
 
                     // as in sedutil-cli, maybe will change
                     pbkdf2::pbkdf2::<hmac::Hmac<sha1::Sha1>>(

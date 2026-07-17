@@ -6,6 +6,7 @@ use uefi::proto::console::text::{Key, ScanCode};
 use uefi::table::runtime::ResetType;
 use crate::{info, error};
 use crate::error::ResultFixupExt;
+use zeroize::Zeroizing;
 
 pub fn config_stdout(st: &mut SystemTable<Boot>) -> uefi::Result {
     st.stdout().reset(false)?.log();
@@ -30,11 +31,11 @@ pub fn write_char(st: &mut SystemTable<Boot>, ch: u16) -> error::Result {
         .fix(info!())
 }
 
-pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<String> {
+pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<Zeroizing<String>> {
     st.stdout().write_str(prompt).unwrap();
 
     let mut wait_events = [unsafe { st.stdin().wait_for_key_event().unsafe_clone() }];
-    let mut password = String::with_capacity(32);
+    let mut password = Zeroizing::new(String::with_capacity(32));
 
     loop {
         st.boot_services()
