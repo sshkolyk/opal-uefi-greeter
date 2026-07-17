@@ -36,6 +36,7 @@ pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<
 
     let mut wait_events = [unsafe { st.stdin().wait_for_key_event().unsafe_clone() }];
     let mut password = Zeroizing::new(String::with_capacity(32));
+    let mut masked = true;
 
     loop {
         st.boot_services()
@@ -55,10 +56,17 @@ pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<
                         backspace(st)?;
                     }
                 }
+                // ignore spurious null keystrokes (scan_code == 0 && unicode_char == 0)
+                Key::Printable(ch) if u16::from(ch) == 0x00 => {}
                 // other printable characters
                 Key::Printable(ch) => {
-                    write_char(st, '*' as u16)?;
+                    write_char(st, if masked { '*' as u16 } else { u16::from(ch) })?;
                     password.push(ch.into());
+                }
+                // F1 toggles showing the typed password instead of asterisks
+                Key::Special(ScanCode::FUNCTION_1) => {
+                    masked = !masked;
+                    redraw_password(st, &password, masked)?;
                 }
                 // shutdown on escape
                 Key::Special(ScanCode::ESCAPE) => {
@@ -81,4 +89,15 @@ fn backspace(st: &mut SystemTable<Boot>) -> error::Result<()> {
     write_char(st, 0x08)?;
     write_char(st, ' ' as u16)?;
     write_char(st, 0x08)
+}
+
+fn redraw_password(st: &mut SystemTable<Boot>, password: &str, masked: bool) -> error::Result<()> {
+    let len = password.chars().count();
+    for _ in 0..len {
+        write_char(st, 0x08)?;
+    }
+    for ch in password.chars() {
+        write_char(st, if masked { '*' as u16 } else { ch as u16 })?;
+    }
+    Ok(())
 }

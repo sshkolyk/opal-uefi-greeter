@@ -5,6 +5,7 @@ It's a fork of <b>necauqua/opal-uefi-greeter</b> with following improvements:
 1. Build using docker compose without headache.
 2. Configurable part-uuid for prevent linux ESP changed by windows in dual boot.
 3. Password input improvements
+4. F1 toggles showing the typed password instead of asterisks
 
 
 
