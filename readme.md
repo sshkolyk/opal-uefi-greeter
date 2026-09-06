@@ -6,6 +6,9 @@ It's a fork of <b>necauqua/opal-uefi-greeter</b> with following improvements:
 2. Configurable part-uuid for prevent linux ESP changed by windows in dual boot.
 3. Password input improvements
 4. F1 toggles showing the typed password instead of asterisks
+5. Flags a likely Shift-release phantom keystroke (some firmware turns a
+   quickly-typed `}` into `}]`): the character stays, a yellow warning appears,
+   the flagged char shows red under F1, and F2 deletes the last flagged one.
 
 
 
