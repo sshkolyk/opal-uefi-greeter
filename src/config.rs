@@ -70,6 +70,10 @@ pub struct Config {
     pub sed_locked_msg: Option<String>,
     pub clear_on_retry: bool,
     pub part_uuid: Option<String>,
+    /// On a rejected password that had flagged (suspected-phantom) characters,
+    /// automatically retry once with those characters removed. Costs one extra
+    /// OPAL attempt in that case. Default on; `off` disables.
+    pub phantom_autofix: bool,
 }
 
 impl Config {
@@ -96,6 +100,7 @@ impl Config {
             sed_locked_msg: optional(&verbs, "sed-locked-msg", None),
             clear_on_retry: optional(&verbs, "clear-on-retry", None).as_deref() == Some("on"),
             part_uuid: optional(&verbs, "part-uuid", None),
+            phantom_autofix: optional(&verbs, "phantom-autofix", None).as_deref() != Some("off"),
         })
     }
 }

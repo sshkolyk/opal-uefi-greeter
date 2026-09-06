@@ -74,22 +74,21 @@ fn run(image_handle: Handle, st: &mut SystemTable<Boot>) -> Result {
             {
                 let mut prompt = config.prompt.as_deref().unwrap_or("password: ");
                 let mut session = loop {
-                    let password = io::read_password(st, prompt)?;
+                    let input = io::read_password(st, prompt)?;
+                    let msg = config.sed_locked_msg.as_deref();
 
-                    let mut hash = zeroize::Zeroizing::new(vec![0u8; 32]);
-
-                    // as in sedutil-cli, maybe will change
-                    pbkdf2::pbkdf2::<hmac::Hmac<sha1::Sha1>>(
-                        password.as_bytes(),
-                        device.proto().serial_num(),
-                        75000,
-                        &mut hash,
-                    );
-
-                    if let Some(s) =
-                        pretty_session(st, &mut device, &*hash, config.sed_locked_msg.as_deref())?
-                    {
+                    // Try the password as typed.
+                    if let Some(s) = try_unlock(st, &mut device, input.typed.as_str(), msg)? {
                         break s;
+                    }
+                    // Rejected: if it had flagged (suspected phantom) characters
+                    // and autofix is on, try once more with them removed.
+                    if config.phantom_autofix {
+                        if let Some(fixed) = input.deflagged.as_deref() {
+                            if let Some(s) = try_unlock(st, &mut device, fixed, msg)? {
+                                break s;
+                            }
+                        }
                     }
 
                     if config.clear_on_retry {
@@ -183,6 +182,23 @@ fn load_config(image_handle: Handle, st: &mut SystemTable<Boot>) -> Result<Confi
     log::set_max_level(config.log_level);
     log::debug!("loaded config.ini = {:#?}", config);
     Ok(config)
+}
+
+fn try_unlock<'d>(
+    st: &mut SystemTable<Boot>,
+    device: &'d mut SecureDevice,
+    password: &str,
+    sed_locked_msg: Option<&str>,
+) -> Result<Option<OpalSession<'d>>> {
+    let mut hash = zeroize::Zeroizing::new(vec![0u8; 32]);
+    // as in sedutil-cli, maybe will change
+    pbkdf2::pbkdf2::<hmac::Hmac<sha1::Sha1>>(
+        password.as_bytes(),
+        device.proto().serial_num(),
+        75000,
+        &mut hash,
+    );
+    pretty_session(st, device, &*hash, sed_locked_msg)
 }
 
 fn pretty_session<'d>(

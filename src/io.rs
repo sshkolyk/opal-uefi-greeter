@@ -41,8 +41,28 @@ pub fn write_char(st: &mut SystemTable<Boot>, ch: u16) -> error::Result {
         .fix(info!())
 }
 
-pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<Zeroizing<String>> {
+pub struct PasswordInput {
+    /// Exactly what was typed.
+    pub typed: Zeroizing<String>,
+    /// The same, minus every flagged (suspected-phantom) character. `None` when
+    /// nothing was flagged.
+    pub deflagged: Option<Zeroizing<String>>,
+}
+
+pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<PasswordInput> {
+    // Reserve a blank line above the prompt for the phantom hint, so the prompt
+    // never moves when the hint appears or disappears.
+    newline(st)?;
+    newline(st)?;
     st.stdout().write_str(prompt).unwrap();
+    let hint_row = st.stdout().cursor_position().1.saturating_sub(1);
+    let cols = st
+        .stdout()
+        .current_mode()
+        .ok()
+        .and_then(|c| c.log())
+        .map(|m| m.columns())
+        .unwrap_or(80);
 
     let mut wait_events = [unsafe { st.stdin().wait_for_key_event().unsafe_clone() }];
     let mut password = Zeroizing::new(String::with_capacity(32));
@@ -53,7 +73,7 @@ pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<
     // user decides (F1 to check, F2 to drop the last flagged one).
     let mut suspects: Vec<usize> = Vec::new();
     let mut prev: Option<char> = None;
-    let mut hinted = false;
+    let mut hint_shown = false;
     // width of the password area currently drawn on screen
     let mut shown: usize = 0;
 
@@ -76,7 +96,7 @@ pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<
                     let _ = st
                         .boot_services()
                         .close_event(unsafe { timer.unsafe_clone() });
-                    return Ok(password);
+                    return Ok(finish(password, &suspects));
                 }
                 // backspace
                 Key::Printable(ch) if u16::from(ch) == 0x08 => {
@@ -86,6 +106,7 @@ pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<
                         suspects.retain(|&s| s != last);
                         prev = password.chars().last();
                         rerender(st, &mut shown, &password, masked, &suspects)?;
+                        refresh_hint(st, hint_row, cols, &mut hint_shown, !suspects.is_empty())?;
                     }
                 }
                 // ignore spurious null keystrokes (scan_code == 0 && unicode_char == 0)
@@ -93,14 +114,14 @@ pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<
                 // other printable characters
                 Key::Printable(ch) => {
                     let c: char = ch.into();
-                    // did the inter-key timer already fire? (not fired => within window)
+                    // has the inter-key timer already fired? (not fired => within window)
                     let within = st
                         .boot_services()
                         .check_event(unsafe { timer.unsafe_clone() })
                         .map(|c| !c.log())
                         .unwrap_or(false);
-                    let suspect = within
-                        && matches!(prev, Some(p) if unshifted_twin(p) == Some(c));
+                    let suspect =
+                        within && matches!(prev, Some(p) if unshifted_twin(p) == Some(c));
 
                     let idx = password.chars().count();
                     password.push(c);
@@ -108,21 +129,14 @@ pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<
                         suspects.push(idx);
                     }
 
-                    if suspect && !hinted {
-                        hinted = true;
-                        newline(st)?;
-                        let _ = st.stdout().set_color(Color::Yellow, Color::Black);
-                        st.stdout().write_str(HINT).unwrap();
-                        let _ = st.stdout().set_color(Color::LightGray, Color::Black);
-                        newline(st)?;
-                        st.stdout().write_str(prompt).unwrap();
-                        shown = 0;
-                        rerender(st, &mut shown, &password, masked, &suspects)?;
-                    } else if suspect {
+                    if suspect && !masked {
                         rerender(st, &mut shown, &password, masked, &suspects)?;
                     } else {
                         write_char(st, if masked { '*' as u16 } else { c as u16 })?;
                         shown += 1;
+                    }
+                    if suspect {
+                        refresh_hint(st, hint_row, cols, &mut hint_shown, true)?;
                     }
 
                     prev = Some(c);
@@ -148,6 +162,7 @@ pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<
                         }
                         prev = password.chars().last();
                         rerender(st, &mut shown, &password, masked, &suspects)?;
+                        refresh_hint(st, hint_row, cols, &mut hint_shown, !suspects.is_empty())?;
                     }
                 }
                 // shutdown on escape
@@ -159,6 +174,24 @@ pub fn read_password(st: &mut SystemTable<Boot>, prompt: &str) -> error::Result<
                 _ => {}
             }
         }
+    }
+}
+
+fn finish(password: Zeroizing<String>, suspects: &[usize]) -> PasswordInput {
+    let deflagged = if suspects.is_empty() {
+        None
+    } else {
+        let mut s = Zeroizing::new(String::with_capacity(password.len()));
+        for (i, c) in password.chars().enumerate() {
+            if !suspects.contains(&i) {
+                s.push(c);
+            }
+        }
+        Some(s)
+    };
+    PasswordInput {
+        typed: password,
+        deflagged,
     }
 }
 
@@ -196,6 +229,43 @@ fn unshifted_twin(shifted: char) -> Option<char> {
 fn newline(st: &mut SystemTable<Boot>) -> error::Result<()> {
     write_char(st, 0x0D)?;
     write_char(st, 0x0A)
+}
+
+/// Draw (or clear) the reserved hint line at `hint_row` without moving the
+/// visible cursor. No-op if the console has no cursor control.
+fn refresh_hint(
+    st: &mut SystemTable<Boot>,
+    hint_row: usize,
+    cols: usize,
+    hint_shown: &mut bool,
+    want: bool,
+) -> error::Result<()> {
+    if want == *hint_shown {
+        return Ok(());
+    }
+    let (cc, cr) = st.stdout().cursor_position();
+    if st.stdout().set_cursor_position(0, hint_row).is_err() {
+        return Ok(()); // no cursor control -- skip the hint quietly
+    }
+    *hint_shown = want;
+
+    let width = cols.saturating_sub(1).max(1);
+    if want {
+        let _ = st.stdout().set_color(Color::Yellow, Color::Black);
+    }
+    let mut n = 0usize;
+    if want {
+        for ch in HINT.chars().take(width) {
+            write_char(st, ch as u16)?;
+            n += 1;
+        }
+    }
+    for _ in n..width {
+        write_char(st, ' ' as u16)?;
+    }
+    let _ = st.stdout().set_color(Color::LightGray, Color::Black);
+    let _ = st.stdout().set_cursor_position(cc, cr);
+    Ok(())
 }
 
 /// Erase the `*shown` cells of the current password area and redraw it: one
