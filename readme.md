@@ -52,12 +52,10 @@ You would want to edit that (by editing `config-example` before making the image
 to specify the UEFI image that will be run - either specify the image of your bootloader (e.g. `\EFI\Microsoft\Boot\bootmgfw.efi` for Windows or `\EFI\BOOT\BOOTX64.efi` to launch the default bootloader such as grub, if present on the encrypted drive) or you can have an EFISTUB setup by specifying the `vmlinuz-linux`
 itself as the UEFI image and giving it kernel arguments in the `config.ini` file.
 
-If you have multiple SEDs - only one of them has to have the image! This is true
-even without using this project I believe. Also, a reminder that this project currently only supports
-NVMe drives with OPAL v2 support, no enterprise.
+The greeter unlocks the supported locked NVMe SEDs first, then searches for the
+configured ESP and loads the configured UEFI image from it. The PBA image itself
+must be available to UEFI before the encrypted drive is unlocked. This project
+currently supports NVMe drives with OPAL v2; enterprise drives are not supported.
 
 ## License
 As with most of my projects, just MIT, no idea about the Rust dual-licensing stuff.
-
-## Socials
-Follow me on [twitter](https://twitter.com/necauqua) and [twitch](https://twitch.tv/necauqua) - I do dev streams sometimes.
